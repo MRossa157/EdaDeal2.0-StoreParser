@@ -1,0 +1,36 @@
+version: '3.4'
+services:
+
+  parser:
+    container_name: store_parser_parser
+
+    build:
+      context: .
+      dockerfile: docker/parser/dockerfile
+
+    restart: always
+
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASS=postgres
+      - DB_NAME=postgres
+
+    command: [
+      "poetry", "run",
+      "py", "app/parser/main.py",
+    ]
+
+    depends_on:
+      - db
+
+  db:
+    container_name: store_parser_postgres
+
+    build:
+      context: .
+      dockerfile: docker/db/dockerfile
+
+    ports:
+      - 5432:5432
