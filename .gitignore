@@ -1,0 +1,7 @@
+.venv
+.mypy_cache
+*.csv
+all_items.json
+__pycache__
+.vscode
+*.env
