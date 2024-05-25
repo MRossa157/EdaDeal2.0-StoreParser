@@ -5,10 +5,9 @@ from parser.enums import Stores
 from typing import Dict, List, Union
 
 import nodriver as uc
-from tqdm import tqdm
-
 from db.models import Category, Product
 from db.queries.orm import AsyncORM
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO)
 
@@ -35,7 +34,7 @@ class SbermarketStoreParser:
         self.driver.stop()
         unique_categories = await self.categories_to_db(all_items)
         await self.items_to_db(all_items)
-        logging.info(f'В БД было загружено {len(all_items)} предметов из {len(unique_categories)} разных категорий')
+        logging.info(f'[{self.store.value['slug'].upper()}] The DB was loaded with {len(all_items)} items from {len(unique_categories)} different categories')
 
         return all_items
 
@@ -47,7 +46,7 @@ class SbermarketStoreParser:
             if category not in unique_categories:
                 unique_categories[category] = item
 
-        for (item_category, item_data) in tqdm(unique_categories.items(), desc="Загружаем категории в БД"):
+        for (item_category, item_data) in tqdm(unique_categories.items(), desc="Loading categories to DB"):
             category = Category(
                 id=item_data['category_id'],
                 name=item_category,
@@ -59,7 +58,7 @@ class SbermarketStoreParser:
         return unique_categories
 
     async def items_to_db(self, items: List[Dict[str, Union[str, List]]]) -> None:
-        for item in tqdm(items, desc="Загружаем предметы в БД"):
+        for item in tqdm(items, desc="Loadig items to DB"):
             product = Product(
                 name=item['name'],
                 image_url=item['img_urls'][0] if item['img_urls'] else None,
@@ -78,11 +77,11 @@ class SbermarketStoreParser:
             # Условие остановки
             if page_data.get('message'):
                 if page_data['message'].count('category without children') > 0:
-                    logging.info(f'Категория {slug} без детей |\n{url}')
+                    logging.info(f'Category {slug} has no child |\n{url}')
                     break
 
             if page_data.get('departments') == []:
-                logging.info(f'Пустой departments в {slug} |\n{url}')
+                logging.info(f'Empty departments in {slug} |\n{url}')
                 break
 
             all_items.extend(await self.__normalize_items_data(page_data, is_final=is_final))

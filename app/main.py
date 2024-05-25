@@ -10,12 +10,12 @@ logging.basicConfig(level=logging.INFO)
 
 async def main():
     await AsyncORM.create_tables()
-
-    store_parser = await SbermarketStoreParser().create(store=Stores.AUCHAN)
-    result = await store_parser.run()
+    for store in Stores:
+        store_parser = await SbermarketStoreParser().create(store=store)
+        result = await store_parser.run()
 
 
 if __name__ == '__main__':
     start_time = time.time()
     asyncio.run(main())
-    logging.info(f"Время работы парсинга составило {(time.time() - start_time):.2f} сек.")
+    logging.info(f"The running time of the parsing was {(time.time() - start_time):.2f} sec.")
