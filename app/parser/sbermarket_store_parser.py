@@ -42,8 +42,8 @@ class SbermarketStoreParser:
                          parent_id=None)]
         else:
             self.store_categories[0] = []
-        self.store_categories[1] = []        # for deep=1
-        self.store_categories[2] = []        # for deep=2
+        self.store_categories[1] = []
+        self.store_categories[2] = []
 
         base_url = f"https://sbermarket.ru/api/v3/stores/{self.store.value['id']}/departments/"
         all_items = await self.get_all_items(base_url)
@@ -69,7 +69,11 @@ class SbermarketStoreParser:
             return all_items
 
         while True:
-            url = base_url + slug + f"?offers_limit=100&per_page=100&page={page_num}"
+            if self.store != Stores.METRO:
+                url = base_url + slug + f"?offers_limit=100&per_page=100&page={page_num}"
+            else:
+                url = base_url + slug + f"?offers_limit=90&per_page=100&page={page_num}"
+
             # Getting data we want
             page_data = await self.get_json(url)
             department_data = page_data.get('department', None)
@@ -138,8 +142,6 @@ class SbermarketStoreParser:
 
 
     async def __categories_to_db(self, categories: Dict[int, List[Category]]) -> None:
-        #TODO: Добавить tqdm progress bar
-        #pbar = tqdm(categories.values(), desc="Loadig categories to DB", total=self.__count_unique_categories(categories))
         for deep_list in categories.values():
             for item in deep_list:
                 await AsyncORM.insert_data(item)
