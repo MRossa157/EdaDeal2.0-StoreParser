@@ -4,18 +4,18 @@ import time
 from parser.enums import Stores
 from parser.sbermarket_store_parser import SbermarketStoreParser
 
-from db.queries.orm import AsyncORM
-
 logging.basicConfig(level=logging.INFO)
 
 async def main():
-    await AsyncORM.create_tables()
-    for store in Stores:
+    for idx, store in enumerate(Stores):
         store_parser = await SbermarketStoreParser().create(store=store)
-        result = await store_parser.run()
+        if idx == 0:
+            await store_parser.run(drop_all_tables=True)
+        else:
+            await store_parser.run(drop_all_tables=False)
 
 
 if __name__ == '__main__':
     start_time = time.time()
     asyncio.run(main())
-    logging.info(f"The running time of the parsing was {(time.time() - start_time):.2f} sec.")
+    logging.info(f"Total running time of the parsing was {(time.time() - start_time):.2f} sec.")

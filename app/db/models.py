@@ -14,6 +14,14 @@ class Category(Base):
     parent_id = Column(Integer, ForeignKey('categories.id'))
     parent = relationship('Category', remote_side=[id])
 
+    def __eq__(self, other):
+        if isinstance(other, Category):
+            return self.id == other.id
+        return False
+
+    def __hash__(self):
+        return hash(self.id)
+
     def __repr__(self):
         return f"<Category(id={self.id}, name={self.name}, image_url={self.image_url}, isFinal={self.isFinal}, parent_id={self.parent_id})>"
 
@@ -26,6 +34,14 @@ class Product(Base):
     category_id = Column(Integer, ForeignKey('categories.id'))
     category = relationship('Category')
     link = Column(String)
+
+    def __eq__(self, other):
+        if isinstance(other, Product):
+            return self.id == other.id
+        return False
+
+    def __hash__(self):
+        return hash(self.id)
 
     def __repr__(self):
         return f"<Product(id={self.id}, name={self.name}, image_url={self.image_url}, category_id={self.category_id}, link={self.link})>"

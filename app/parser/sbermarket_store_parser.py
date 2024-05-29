@@ -16,119 +16,156 @@ class SbermarketStoreParser:
     def __init__(self) -> None:
         self.store: Stores = None
         self.driver: uc.Browser = None
+        self.debug_mode: bool = False
 
-        self.category_mapper = {}
-
-        self.global_category_id = 0
+        self.store_categories = {}
 
     @classmethod
-    async def create(cls, store: Stores,):
+    async def create(cls, store: Stores, debug_mode: bool = False):
         self = cls()
         self.driver = await uc.start()
         self.store = store
+        self.debug_mode = debug_mode
         return self
 
-    async def run(self) -> None:
+    async def run(self, drop_all_tables: bool = True) -> None:
+        if drop_all_tables:
+            await AsyncORM.create_tables()
+
+        # Initialize categories list for each deep (deep = 0, 1, 2)
+        if drop_all_tables:
+            self.store_categories[0] = [
+                Category(id=0,
+                         name='Главная категория',
+                         image_url=None,
+                         isFinal=False,
+                         parent_id=None)]
+        else:
+            self.store_categories[0] = []
+        self.store_categories[1] = []        # for deep=1
+        self.store_categories[2] = []        # for deep=2
+
         base_url = f"https://sbermarket.ru/api/v3/stores/{self.store.value['id']}/departments/"
-        all_items = await self.__get_all_items(base_url)
+        all_items = await self.get_all_items(base_url)
         self.driver.stop()
-        unique_categories = await self.categories_to_db(all_items)
-        await self.items_to_db(all_items)
-        logging.info(f'[{self.store.value['slug'].upper()}] The DB was loaded with {len(all_items)} items from {len(unique_categories)} different categories')
+
+        exists_categories = await AsyncORM.select_categories()
+        unique_categories = self.__unique_categories(exists_categories, self.store_categories)
+
+        await self.__categories_to_db(unique_categories)
+        await self.__items_to_db(all_items)
+
+        logging.info(
+            f'[{self.store.value['slug'].upper()}] {len(all_items)} items was loaded to DB from {self.__count_unique_categories(unique_categories)} unique categories'
+            )
 
         return all_items
 
-    async def categories_to_db(self, items: List[Dict[str, Union[str, List]]]) -> Dict:
-
-        unique_categories = {}
-        for item in items:
-            category = item['category']
-            if category not in unique_categories:
-                unique_categories[category] = item
-
-        for (item_category, item_data) in tqdm(unique_categories.items(), desc="Loading categories to DB"):
-            category = Category(
-                id=item_data['category_id'],
-                name=item_category,
-                image_url=None,
-                isFinal=item_data['is_final'],
-                parent_id=item_data['parent_id']
-            )
-            await AsyncORM.insert_item(category)
-        return unique_categories
-
-    async def items_to_db(self, items: List[Dict[str, Union[str, List]]]) -> None:
-        for item in tqdm(items, desc="Loadig items to DB"):
-            product = Product(
-                name=item['name'],
-                image_url=item['img_urls'][0] if item['img_urls'] else None,
-                category_id=item['category_id'],
-                link=item['url']
-            )
-            await AsyncORM.insert_item(product)
-
-    async def __get_all_items(self, base_url: str, slug: str='', is_final=True) -> List[Dict[str, Union[str, List]]]:
+    async def get_all_items(self, base_url: str, slug: str='', deep=1) -> List[Dict[str, Union[str, List]]]:
         all_items = []
         page_num = 1
+
+        if deep > 2:
+            return all_items
+
         while True:
             url = base_url + slug + f"?offers_limit=100&per_page=100&page={page_num}"
-            page_data = await self.__get_json(url)
+            # Getting data we want
+            page_data = await self.get_json(url)
+            department_data = page_data.get('department', None)
+            departments_data = page_data.get('departments', None)
 
-            # Условие остановки
-            if page_data.get('message'):
-                if page_data['message'].count('category without children') > 0:
-                    logging.info(f'Category {slug} has no child |\n{url}')
-                    break
 
-            if page_data.get('departments') == []:
-                logging.info(f'Empty departments in {slug} |\n{url}')
+            if department_data:
+                current_id = department_data['id']
+            else:
+                current_id = 0      # If current_id not exists, then it's "Главная категории" with id=0
+
+            if departments_data == []:
+                logging.info(f'Empty departments in {slug if slug != '' else 'base page'} |\n{url}')
                 break
 
-            all_items.extend(await self.__normalize_items_data(page_data, is_final=is_final))
+            for child_data in departments_data:
+                child_slug = child_data['slug']
+                has_child = await self.check_child(base_url=base_url, slug=child_slug)
+                if has_child:
+                    child_items = await self.get_all_items(base_url, slug=child_slug, deep=deep+1)
+                    if child_items != []:
+                        self.store_categories[deep].append(Category(id=child_data['id'],
+                                                                name=child_data['name'],
+                                                                image_url=None,
+                                                                isFinal=False,
+                                                                parent_id=current_id))
+                        all_items.extend(child_items)
+                else:
+                    self.store_categories[deep].append(Category(id=child_data['id'],
+                                                                name=child_data['name'],
+                                                                image_url=None,
+                                                                isFinal=True,
+                                                                parent_id=current_id))
+                    all_items.extend(await self.__normalize_special_category_products(child_data))
 
-            for department in page_data['departments']:
-                child_slug = department['slug']
-                child_items = await self.__get_all_items(base_url, slug=child_slug, is_final=False)
-                all_items.extend(child_items)
+                if self.debug_mode:
+                    break
 
             page_num += 1
+
         return all_items
 
-    async def __get_json(self, url: str) -> Dict:
-        page = await self.driver.get(url)
+    async def check_child(self, base_url: str, slug: str) -> bool:
+        url = base_url + slug
+        page_data = await self.get_json(url, new_tab=True)
+        if page_data.get('message'):
+            if page_data['message'].count('category without children') > 0:
+                return False
+        return True
+
+    async def get_json(self, url: str, new_tab=False) -> Dict:
+        page = await self.driver.get(url, new_tab=new_tab)
+        # If there is no delay - does not have time to collect data correctly
+        await page.sleep(0.1875)
         page_content = await page.get_content()
         match = re.search(r"<pre>(.*?)</pre>", page_content)
+        pre_text = '{}'
         if match:
             pre_text = match.group(1)
+        if new_tab:
+            await page.close()
+        return json.loads(pre_text)
 
-            return json.loads(pre_text)
-        return {}
+    def __count_unique_categories(self, categories_deep_dict: Dict[int, List[Category]]) -> int:
+        return sum(len(categories) for categories in categories_deep_dict.values())
 
-    async def __normalize_items_data(self, page_data: dict, is_final=True) -> List[Dict[str, Union[str, List]]]:
-        category_items = []
-        for departament in page_data['departments']:
-            for products in departament['products']:
 
-                current_slug = departament['slug']
-                if self.category_mapper.get(current_slug, None) is None:
-                    self.category_mapper[current_slug] = self.global_category_id
-                    self.global_category_id += 1
+    async def __categories_to_db(self, categories: Dict[int, List[Category]]) -> None:
+        #TODO: Добавить tqdm progress bar
+        #pbar = tqdm(categories.values(), desc="Loadig categories to DB", total=self.__count_unique_categories(categories))
+        for deep_list in categories.values():
+            for item in deep_list:
+                await AsyncORM.insert_data(item)
 
-                parent_slug = page_data.get('department', None)
-                if parent_slug:
-                    parent_slug = parent_slug.get('slug', None)
+    def __unique_categories(self, exists_categories: List[Category], new_categories: Dict[int, List[Category]]) -> Dict[int, List[Category]]:
+        new_categories = new_categories.copy()
+        for deep_idx, deep_idx_list in new_categories.items():
+            unique_category_set = set(exists_categories + deep_idx_list)
+            new_categories[deep_idx] = list(unique_category_set)
 
-                item_data = {
-                    'name': products.get('name', None),
-                    'url': products.get('canonical_url', None),
-                    'img_urls': products.get('image_urls', []),
+        return new_categories
 
-                    'category': current_slug,
-                    'category_id': self.category_mapper.get(current_slug),
+    async def __items_to_db(self, items: List[Product]) -> None:
+        for item in tqdm(items, desc="Loadig items to DB"):
+            await AsyncORM.insert_data(item)
 
-                    'is_final': is_final,
-                    'parent_id': self.category_mapper.get(parent_slug, None)
-                }
+    async def __normalize_special_category_products(self, departament: dict) -> List[Dict[str, Union[str, List]]]:
+        category_id = departament['id']
 
-                category_items.append(item_data)
-        return category_items
+        items = []
+        for product in departament['products']:
+            item_data = Product(
+                name=product.get('name', None),
+                image_url=product.get('image_urls', [None])[0],
+                category_id=category_id,
+                link=product.get('canonical_url', None)
+                )
+            items.append(item_data)
+        return items
